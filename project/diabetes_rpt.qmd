@@ -1,0 +1,831 @@
+---
+title: "Prediction of Early Onset Diabetes \n Using Classification Algorithms"
+execute: 
+  echo: false
+number-sections: true
+bibliography: references.bib
+csl: apa-numeric-superscript.csl
+mainfont: Arial
+fontsize: 11pt
+format:
+  pdf:
+    include-in-header: 
+      text: |
+        \usepackage{typearea}
+  
+---
+
+```{r}
+#| label: packages
+#| include: false
+
+require(tidyverse)
+require(broom)
+require(gt)
+require(ISLR)
+require(randomForest)
+require(arules)
+require(arulesViz)
+require(tree)
+require(e1071)
+# additional packages 
+require(gtsummary)
+require(sjPlot)
+require(DataExplorer)
+require(glmulti)
+require(tictoc)
+require(flextable)
+require(performance)
+```
+
+```{r}
+#| label: data
+#| include: false
+
+factor_levels <- c("No", "Yes")
+diabetes <- read_csv('../raw_data/diabetes.csv', 
+                     col_names = TRUE,
+                     col_types = list(
+                       `Age` = col_double(),
+                       `Gender` = col_factor(),
+                       `Polyuria` = col_factor(levels = factor_levels),
+                       `Polydipsia` = col_factor(levels = factor_levels),
+                       `sudden weight loss` = col_factor(levels = factor_levels),
+                       `weakness` = col_factor(levels = factor_levels),
+                       `Polyphagia` = col_factor(levels = factor_levels),
+                       `Genital thrush` = col_factor(levels = factor_levels),
+                       `visual blurring` = col_factor(levels = factor_levels),
+                       `Itching` = col_factor(levels = factor_levels),
+                       `Irritability` = col_factor(levels = factor_levels),
+                       `delayed healing` = col_factor(levels = factor_levels),
+                       `partial paresis` = col_factor(levels = factor_levels),
+                       `muscle stiffness` = col_factor(levels = factor_levels),
+                       `Alopecia` = col_factor(levels = factor_levels),
+                       `Obesity` = col_factor(levels = factor_levels),
+                       `class` = col_factor(levels = c('Negative', 'Positive'))
+                     ))
+
+names(diabetes) <- c('age', 'gender', 'polyuria', 'polydipsia', 'wtloss',
+                     'weakness', 'polyphagia', 'genitalthrush', 
+                     'visualblur', 'itching', 'irritable', 'delayheal',
+                     'partparesis', 'musclestiff', 'alopecia', 'obesity',
+                     'class')
+diabetes <- mutate(diabetes, id = c(1:nrow(diabetes)), .before = age)
+```
+
+\newpage
+
+# Introduction
+
+Diabetes is a major health problem afflicting 537M adults worldwide and is responsible for 6.7M deaths in 2021.  It is also an economic problem costing 966B USD in health expenditure in the same year.  Certain demographics have it worse than others as 3 out of 4 of adults with diabetes live in low-to-middle income countries.  The outlook does not seem promising as the number of diabetes cases is projected to reach 634M by 2030 @IDF_atlas.  
+
+A lot of contributions have been done to help mitigate this problem.  Many of them are model predictions of diabetes using Deep Neural Network, Decision Tree @maniruzzaman_comparative_2017, Support Vector Machines, k-Nearest Neighbors, Random Forests @muhammad_predictive_2020 just to name a few.  The models involved complex data set from laboratory test results like plasma glucose concentration, blood pressure, skin fold thickness, serum insulin, cholesterol, high density lipoprotein (HDL), triglycerides, and state of pregnancy in female among others. 
+
+The complexities that made previous work great have also made them inaccessible, difficult to follow and implement.  Some just cannot cannot afford expensive tests or are not able to manage laborious repeated monitoring and collection of data from participants.  To help address the gap from these complex models, in this paper we will build several models from simpler data from survey questionnaires involving 16 predictors with mostly binary categorical data to classify whether or not someone is at risk for diabetes.  The best model can be used to create a screening tool that is accessible by individuals, families and healthcare professionals to predict the disease in its early phase to prevent or delay health complications. 
+
+Since most of our variables are going to be categorical, our predictive data mining tasks are restricted to different classification methods.  These methods involve multiple logistic (LR) regression to create models based on the log odds, Naive Bayes (NB) based on prior probabilities, and Random Forests (RF) based on ensemble of model prediction procedures such as decision trees, bagging, bootstrapping and aggregation.  Additionally, we will investigate rules based on association procedure that might be used as a criterion to associate combination predictors that lead to the disease and whether these predictors match up as significant in our classification models.  
+
+
+# Data {#sec-data}
+
+## Descriptions{#sec-data_desc}
+
+We obtained our diabetes data from the UCI Machine Learning Repository @RN240.  It was originally collected from patients of Sylhet Diabetes Hospital in Sylhet, Bangladesh.  It comprises of ``r nrow(diabetes)`` observations with ``r dim(diabetes)[2]-1`` variables.  Namely,  ``r names(diabetes)[-1]``.
+
+As shown in @tbl-eda_response, the numeric variable `age` has a minimum value of 16, mean value of 48.03, and maximum value of `90`; `gender` comprises 328 `Males` and `192` Females; `polyuria`, a term for excessive urination, has 258 Yes and 262 No; `polydipsia`, a term for excess thirst, has 233 Yes and 287 No; sudden weight loss, `wtloss` has 217 Yes and 303 No; `weakness` has 305 Yes and 215 No; `polyphagia`, a term for excessive eating has 237 Yes and 283 No; `genitalthrush`, a term for common yeast infection caused by fungus candida has 116 Yes and 404 No; visual blurring, `visualblur` has 233 Yes and 287 No; `itching` has 253 Yes and 267 No; `irritability` has 126 Yes and 394 No; `delayedheal` has 239 days of healing and a few days Yes and 281 No; partial paresis, `partparesis` or more commonly known as partial paralysis has 224 Yes and 296 No; `musclestiff` has 195 Yes and 325 No; `alopecia`, an immune system-induced hair loss has 179 Yes and 341 No; `obesity` has 88 Yes and 432 No; `class`, has 320 Positive and 200 Negative.  Additional summary is provided in @tbl-eda_class for the Negative and Positive case for those that responded "yes" to questionnaires.  
+
+## Distributions{#sec-data_dist}
+
+The distributions of age by gender and class in @fig-dist_age (a) show that there are indeed more males than females in both classes.  The boxplots in (b) show the mean and median of the age in the positive class is also higher in males. The means of both males and females are about the same in the negative class.  However, the median age of female in the negative class is higher.
+
+
+```{r}
+#| include: false
+
+ave_ageclass <- diabetes %>% 
+  select(age, class) %>% 
+  group_by(class) %>% 
+  summarise(ave = mean(age),
+            stdev = sd(age))
+
+```
+
+## Central tendencies{#sec-central_tendency}
+
+The central tendencies for the age by class differ as shown in @tbl-test_age_gender.  The mean age for the positive class is ``r round(ave_ageclass$ave[2],1)``. For the negative class, the mean is ``r round(ave_ageclass$ave[1],1)`` Both classes have the same standard deviation of ``r round(ave_ageclass$stdev[1],1)``.  Grouping by the response `class` reveals that there are about 46% positive case of male and 54% female.  However, the proportion of male is higher than female overall.  So there are about 45% of all males are positive and about 90% of all females are positive.
+
+# Methods{#sec-Methods}
+
+## Re-Sampling
+
+For our re-sampling procedures, we used 80/20 proportion where about 80% of the data will be used for training and the remainder for the testing of the models.  We implemented stratification to our class variable for the proportion method to account for the imbalance in the data. We used 80/20 proportion split instead of other proportions based the paper published by Gholami etal concluding that $\simeq$ 0.8 is empirically supported the best split. @gholamy_why_8020.  We also used cross-validation methods with k=10-folds.
+
+
+## Models and Tools
+
+For the multiple logistic regression (LR), the `class` response variable has `(`r levels(diabetes$class)`)` levels that corresponds to the classifier:
+
+
+
+$$\hat{C}(x)= \left\{
+  \begin{matrix}
+    1 \text{('Positive')}& \hat{p}(x) > 0.5 \\
+    0 \text{('Negative')}& \hat{p}(x) \le 0.5
+  \end{matrix}
+\right.
+$$ {#eq-logitclassifier}
+
+
+
+ that was used to obtain the predicted probabilities:
+
+$$\hat{p}(x) = \hat{P}(Y=1|X=x)$$ {#eq-predprobabilities}
+
+
+We used the function `glm()` from the `stats` @R_statspack package to build full and reduced models to predict the response, `class`. The reduced model was based on the significant predictors from the logistic regression output of the full model.  Significant predictors were based on `p-value <0.05`.
+
+For the Naive Bayes (NB), we used the function `naiveBayes()` from the `e1071` @r_e1071 package to build a full NB models. Apart from removing continuous variable `age`, we did not perform feature subset selection.  
+
+For the Random Forests (RF), we used the function `randomForest()` from the `randomForest` @liaw_weiner_rf package to build a full model.  Then we used the variable importance by mean decrease accuracy cut off value of greater than 20 to create a reduced model.  We let the system provide default number of variables for classification, $\sqrt{p}$, to the `mtry` parameter and default out-of-bag value of 500 to the `ntree` parameter. 
+
+
+Since we addressed the class imbalance by utilizing stratified re-sampling, we used the prediction accuracy to measure model performance: 
+
+
+$$Accuracy=\frac{TP+TN}{TP+FP+TN+FN}$${#eq-accuracy}
+
+where: 
+TP: True Positive when an instance is positive and it is classified as positive;
+
+FP: False Positive when an instance is negative and it is classified as positve.  It is a Type I error;
+
+TN: True Negative when an instance is negative and it is classified as negative;
+
+FP: False Negative when instance is positive and it is classified as negative. It is a type II error.
+
+We used the same measure performance for cross-validation re-sampling for consistency.
+
+We used the `as()` , `inspect()` from the `arule` @arules_hasler package to determine the rules that are positvely associated for diabetes.  We also used `arulesViz` package @arulesviz_hasler to plot the rules.
+
+Finally, we used a host of data wrangler and visualizer using the `tidyverse` @tidyworld package.
+
+
+# Results{#sec-results}
+
+
+```{r}
+#| label: stratified8020
+#| include: false
+
+# stratified hold-out following 80/20. This means 80% of the positive case and 80% of the negative case will comprise the total 80% of the train data
+set.seed(100)
+train80 <- sample(1:nrow(diabetes), 
+                  replace = F, 
+                  prob = diabetes$class, 
+                  size = nrow(diabetes)*0.8)
+test20 <- diabetes[-train80,]
+test20.values <- diabetes$class[-train80]
+
+```
+
+
+## Logistic Regression{#sec-results_lr}
+
+
+```{r}
+#| label: logreg_8020f
+#| include: false 
+
+
+train80.glm <- glm(class ~ . -id ,
+                   data=diabetes,
+                   subset=train80,
+                   family=binomial)
+
+# significant predictors pvalue < 0.05
+signif8020f <- broom::tidy(train80.glm) %>% 
+  mutate(oddsratio = exp(estimate)) %>%
+  mutate_if(is.numeric, round, digits = 3) %>%
+  filter(p.value < 0.05)
+
+m8020f <- broom::tidy(train80.glm) %>% 
+  mutate(oddsratio = exp(estimate)) %>%
+  mutate_if(is.numeric, round, digits = 3)
+
+# performance stratified 80/20 logistic regression FULL model 
+train80glm.probs <- predict(train80.glm, 
+                            newdata = test20, 
+                            type="response")
+# predictions stratified 80/20 logistic regression FULL model
+train80glm.predict <- ifelse(train80glm.probs > 0.5, "Positive", "Negative")
+
+```
+
+
+The significant predictors of the full LR model from the 80/20 split are ``r signif8020f$term`` with corresponding odds ratio of `[`r signif8020f$oddsratio`]` as shown in @tbl-logreg_8020f_summary.
+
+The full model's performance in @tbl-logreg8020f_confuse show `r table(actual = test20.values, predicted = train80glm.predict)[3]` false positive (FP) and `r table(actual = test20.values, predicted = train80glm.predict)[2]` false negative (FN) from `r nrow(test20)` test observations.  Based on this result, the prediction accuracy is `r round(mean(test20.values == train80glm.predict), 4)*100` %. 
+
+The full model probability estimate for our binary response, `class`:
+
+$$p(x) = \frac{e^{\beta_0 + \beta_1x_1 + \cdots + \beta_{16}x_{16}}}{1+e^{\beta_0 + \beta_1x_1 + \cdots + \beta_{16}x_{16}}}
+$$ {#eq-logit8020f}
+
+where: 
+$\beta_0, \beta_1, \cdots, \beta_{16}=$ `[`r m8020f$estimate`]`.
+
+$x_1, x_2, \cdots , x_{16}$ are all the predictors.
+
+
+```{r}
+#| include: false
+
+# 80/20 REDUCED model
+train80.glm2 <- glm(class ~ gender + polyuria + polydipsia + genitalthrush + itching + irritable, 
+                    data = diabetes,
+                    subset = train80,
+                    family = binomial)
+
+m8020r <- broom::tidy(train80.glm2) %>%
+  mutate(oddsratio = exp(estimate)) %>%
+  mutate_if(is.numeric, round, digits = 3)
+
+# performance of stratified 80/20 logistic regression reduced model
+train80glm2.probs2 <- predict(train80.glm2, 
+                             newdata = test20,
+                             type = "response")
+train80glm2.predict2 <- ifelse(train80glm2.probs2 > 0.5, "Positive", "Negative")
+```
+
+
+The reduced model from 80/20 data has odds ratio of `[`r m8020r$oddsratio`]` as shown in @tbl-logregr_summary.  The reduced model's performance in @tbl-logreg8020r_confuse show `r table(actual = test20.values, predict = train80glm2.predict2)[3]` false positives (FP) and `r table(actual = test20.values, predict = train80glm2.predict2)[2]` false negatives (FN) from `r nrow(test20)` observations.  Based on this result, the prediction accuracy is `r round(mean(test20.values == train80glm2.predict2),4)*100` %. 
+
+
+```{r}
+#| label: cvsampling
+#| include: false
+
+# k=10 cross-validation logistic regression
+set.seed(100)
+k = 10
+
+# randomly assign indices to folds
+folds <- sample(1:k, nrow(diabetes), replace = TRUE)
+```
+
+
+```{r}
+#| label: logregcvf
+#| include: false
+
+# CV full model
+# zero vectors to hold accuracy values of cv method
+accuracy = rep(0,k)
+
+for(i in 1:k)
+{
+  # cv logistic regression model of train data
+  train.glm2 <- glm(class ~ . -id,
+                      family = "binomial",
+                      data = diabetes[folds!=i, ])
+  
+  # assign the current ith iteration as the test data
+  test.cv <- diabetes[folds==i, ]
+  
+  # obtain the probabilities using the test data
+  trainglm.probs2 <- predict(train.glm2, test.cv, type="response")
+  
+  glm.predict2 <- ifelse(trainglm.probs2 > 0.5, "Positive", "Negative")
+  
+  # y-value (class variable) of the test data in the ith iteration
+  testcv.values <- diabetes$class[folds==i]
+  
+  # calculate the accuracy 
+  accuracy[i] <- mean(glm.predict2==testcv.values)
+}
+
+```
+
+
+```{r}
+#| label: logregcvr
+#| include: false
+
+# reduced CV model
+accuracyred <- rep(0, 10)
+for(i in 1:k)
+{
+  # cv logistic regression model of train data
+  train.glmred <- glm(class ~ gender + polyuria + polydipsia + genitalthrush + itching + irritable,
+                    family = "binomial",
+                    data = diabetes[folds!=i, ])
+  
+  # assign the current ith iteration as the test data
+  test.cvred <- diabetes[folds==i, ]
+  
+  # obtain the probabilities using the test data
+  trainglm.probsred <- predict(train.glmred, test.cvred, type="response")
+  
+  glm.predictred <- ifelse(trainglm.probsred > 0.5, "Positive", "Negative")
+  
+  # y-value (class variable) of the test data in the ith iteration
+  testcv.valuesred <- diabetes$class[folds==i]
+  
+  # calculate the accuracy 
+  accuracyred[i] <- mean(glm.predictred==testcv.valuesred)
+}
+```
+
+
+The prediction accuracy of the full LR model from cross-validation method was `r round(mean(accuracy),4)*100` %. While the reduced LR model `r round(mean(accuracyred), 4)*100` %.
+
+
+## Naive Bayes
+
+
+```{r}
+#| label: nb8020f
+#| include: false
+
+diabetes.nb <- naiveBayes(class ~ . -id -age, 
+                          data = diabetes,
+                          subset = train80)
+
+# stratified 80/20 NB prediction
+diabetesnb.pred <- predict(diabetes.nb, 
+                           test20, 
+                           type = "class")
+nb8020f_tab <- table(actual = test20.values, predicted = diabetesnb.pred)
+
+```
+
+
+The confusion matrix for the full NB from 80/20 data in @tbl-nb8020f_confuse show that there are `r nb8020f_tab[3]` false positives (FP) and `r nb8020f_tab[2]` false negatives from `r nrow(test20)` observations. This makes the prediction accuracy about  `r round(mean(test20.values == diabetesnb.pred),4)*100` %. The corresponding table of prior probabilities with the symptoms are shown in @tbl-nb8020f_priors_symptoms and with the gender are shown in @tbl-nb8020f_priors_gender.  
+
+
+```{r}
+#| label: nbcvf
+#| include: false
+
+# zero vectors to hold accuracy values of cv method
+accuracy.nb = rep(0,k)
+
+for(i in 1:k)
+{
+  # cv logistic regression model of train data
+  train.nb <- naiveBayes(class ~ . -id -age,
+                           data = diabetes[folds!=i, ],
+                           type = "class")
+  
+  # assign the current ith iteration as the test data
+  test.nb <- diabetes[folds == i,]
+  
+  # obtain prediction using test data
+  trainnb.pred <- predict(train.nb, 
+                          test.nb, 
+                          type= "class")
+  
+  # obtain response values of test data
+  testnb.values <- diabetes$class[folds == i]
+  
+  # calculate the accuracy 
+  accuracy.nb[i] <- mean(testnb.values == trainnb.pred)
+  
+}
+```
+
+The prediction accuracy of full NB from cross-validation data is `r round(mean(accuracy.nb), 4)*100` %. 
+
+
+## Random Forests
+
+
+```{r}
+#| label: rf8020f
+#| include: false
+
+# Full model RF
+set.seed(100)
+
+# random forest model using train80 
+# mtry will be default sqrt(p) where p is the number of parameters
+bag.diabetes <- randomForest(class ~ . -id, 
+                             data = diabetes,
+                             subset = train80,
+                             importance = TRUE)
+
+# rf 80/20 model prediction
+yhat.bag <- predict(bag.diabetes, 
+                    newdata=diabetes[-train80,]) # or test20
+
+# rf 80/20 performance
+rf8020f_confuse <- table(actual = test20$class, predicted = yhat.bag)
+
+```
+
+
+For the full RF training model from 80/20 data, there were `r bag.diabetes$ntree` trees generated and the number of variables tried at each split was the default value, `r bag.diabetes$mtry`.   Based on the false positive and false negative in the confusion matrix in @tbl-rf8020train_confuse indicate an out-of-bag (OOB) error rate of `r round(1 - mean(diabetes$class[train80] == bag.diabetes$predicted), 4)*100` %.  The plot of the OOB error rate in @fig-rf8020train_error_rate (black line) indicate high accuracy prediction. Variable importance parameter was used in the training set. 
+
+The confusion matrix of the full RF model in @tbl-rf8020f_confuse show `r rf8020f_confuse[3]` false positive (FP) and `r rf8020f_confuse[2]` false negative (FN). Based on this the prediction accuracy of full RF model from 80/20 split data was  `r round(mean(test20$class == yhat.bag), 4)*100` %.  The mean decrease accuracy cut off greater than 20 was used for subset selection .  As shown in @fig-rf8020f_varimp there were 10 variables in the reduced model namely `polyuria`, `polydipsia`, `gender`, `age`, `delayheal`, `alopecia`, `irritable`, `partparesis`, `itching`, and `weightloss`.  
+
+
+```{r}
+#| label: rf8020r
+#| include: false
+
+# reduced RF model based on meandecreasaccuracy>20
+bag.diabetesred <- randomForest(class ~ age + gender + polyuria + polydipsia + wtloss + itching + irritable + delayheal + partparesis + alopecia,
+                             data = diabetes,
+                             subset = train80,
+                             importance = TRUE)
+
+# reduced RF prediction
+yhat.bagred <- predict(bag.diabetesred, 
+                       newdata=diabetes[-train80,])
+
+rf8020r_confuse <- table(actual = test20$class, predicted = yhat.bagred)
+
+```
+
+
+The confusion matrix of the reduced RF model in @tbl-rf8020r_confuse show `r rf8020r_confuse[3]` false positives (FP) and `r rf8020r_confuse[2]` false negatives (FN), based on this prediction accuracy was `r round(mean(test20$class == yhat.bagred),4)*100` %.  
+
+
+# Association Rules{#sec-assoc_rules}
+
+
+```{r}
+#| label: assoc_rules
+#| include: false
+
+diabetes2 <- diabetes
+
+diabetes2 <- diabetes2 %>% 
+  mutate(agegrp = ifelse(age <= 24, "early", 
+                         ifelse(age >= 25 & age <= 54, "prime", "mature")), .before = age) %>%
+  select(c( -id))
+
+diabetes2$agegrp <- as.factor(diabetes2$agegrp)
+transac <- as(diabetes2, "transactions")
+dim(transac)
+itemLabels(transac)
+summary(transac)
+itemFrequencyPlot(transac, topN=30, cex.names = 1)
+
+
+
+diabetes.rules <- apriori(data = transac,
+                          parameter = list(minlen=4, supp=0.3,conf=0.5, target = "rules"),
+                          appearance = list(default="lhs", rhs = "class=Positive"))
+
+
+```
+
+
+Two rules were produced from parameters `minlen=4`, `support=0.3`, `conf=0.5` `rhs='class=Positive'`.  However only the first rule makes sense in the context of the disease.  These rules are shown in @fig-diabetes_rules where `rule 1`: `polyuria=Yes`, `polydipsia=Yes`, `alopecia=No` are likely to lead  to `class=Positive` with support of 0.32, confidence of 1, lift of 1.63 and a count of 166.
+
+
+
+# Discussion{#sec-discuss}
+
+We have an interesting case in the full LR model about the significance of gender as high predictor.  In general, middle-aged men tend to be more susceptible than women @gale_diabetes_2001.  Our model reveals that being female carries a higher risk with an odds ratio of ``r signif8020f$oddsratio[1]``. A possible explanation that this be due to the disproportion of gender when grouped by `class`.  For the positive cases female was 54% while male was 46%.  In addition, the unequal proportion of positive cases (see @sec-central_tendency) when comparing gender overall compounded this problem.  
+
+The full LR model from the 80/20 re-sampling had a prediction accuracy of `r round(mean(test20.values == train80glm.predict), 4)*100`%.  As expected, it performed better when compared to the reduced LR from 80/20.  It also performed better than both the full NB models using 80/20 and cross-validation. Although, it was not far off from the full LR 80/20, it was surprising that full LR from cross-validation under-performed with `r round(mean(accuracy),4)*100` % prediction accuracy.  This may be because we did not implement stratified cross-validation.  This could be done in future studies to improve the prediction accuracy of our current models.
+
+The reduced RF model from 80/20, which had a `r round(mean(test20$class == yhat.bagred),4)*100` % prediction accuracy performed better than the highest performing full LR model. The best model is the full RF model from the 80/20 re-sampling at `r round(mean(test20$class == yhat.bag), 4)*100` % prediction accuracy as shown in @tbl-summary_scores. 
+
+In addition, the predictors `Polyuria=Yes`, `Polydipsia=Yes` and `Gender` always emerged very significant in different models as shown in @fig-diabetesfinalrules.  These predictors combined make a compelling case for markers for the early phase of diabetes.  These rules are easy to follow that they can be used as quick guideline for people who do not have an easy access to healthcare.
+
+
+# Conclusion{#sec-conclusion}
+
+
+```{r}
+model_scores <- tibble(model = c(rep("LR",4), "NB", "NB", "RF", "RF"),
+       type = c("full", "reduced", "full", "reduced", rep("full", 3), "reduced"),
+       resampling = c("prop", "prop", "cv", "cv", "prop", "cv", "prop", "prop"),
+       accuracy = c(
+         round(mean(test20.values == train80glm.predict), 4)*100,
+         round(mean(test20.values == train80glm2.predict2),4)*100,
+         round(mean(accuracy),4)*100,
+         round(mean(accuracyred),4)*100,
+         round(mean(test20.values == diabetesnb.pred),4)*100,
+         round(mean(accuracy.nb), 4)*100, 
+         round(mean(test20$class == yhat.bag), 4)*100,
+         round(mean(test20$class == yhat.bagred),4)*100)
+       )
+  
+```
+
+
+We have created a high performing random forest model with from 80/20 data with a prediction accuracy of `r model_scores$accuracy[7]` %.  This model is very accessible as it only requires 16 non-invasive data such as age, gender, and certain symptoms and conditions for an input.  It does not not even require a family medical history and the output is easy to understand and interpret. This model or an improved version can be used as part of a screening tool for prognosis of early onset of diabetes especially for those who are reluctant getting invasive diagnostic test and procedures. We see a great potential when it is deployed as an app for everyone to use. If there is no access to an app, the information in @fig-diabetesfinalrules can be used a guideline.  With this information and model in an app, we are one step closer in helping prevent or delay health complications from diabetes. 
+
+
+\newpage
+
+<!-- changing the orientation to landscape --------------------------------- -->
+
+```{=tex}
+\KOMAoptions{paper=landscape,pagesize}
+\recalctypearea
+```
+
+
+# Figures and Tables 
+
+## EDA{#sec-ft_eda}
+
+
+```{r}
+#| label: tbl-eda_class
+#| tbl-cap: "Summary of Diabetes data acquired from UCI Machine Learning Repository. \n Characteristics in the Negative and Positive columns are those that responded 'Yes'. "
+#| tbl-cap-location: bottom
+#| message: false
+
+# eda_class <- 
+diabetes %>%
+  select(-id, -age, -gender) %>%
+  tbl_summary(by = "class") %>%
+  add_overall() %>%
+  bold_labels() 
+# eda_class <- data.frame(eda_class)
+# kableExtra::kbl(eda_class, booktabs = T) %>%
+#   kableExtra::kable_styling("hold_position")
+
+```
+
+
+\newpage
+
+<!-- % changing the orientation to portrait again -------------------------- -->
+
+
+```{r}
+#| label: fig-dist_age
+#| warning: false
+#| fig-cap: Distribution of Age
+#| fig-subcap:
+#|  - "Histogram"
+#|  - "Box plot"
+#| layout-ncol: 2
+
+
+ggplot(diabetes, 
+       aes(x = age, 
+           fill = gender,
+           color = gender)) +
+  geom_histogram(bins = 15, alpha = 0.4) +
+  facet_wrap(~class) + 
+  theme_bw() +
+  theme(legend.position = "top")
+
+
+ggplot(diabetes, aes(x = gender, y = age, fill = gender)) +
+  geom_boxplot(alpha = 0.5) +
+  #geom_jitter(shape =1, size = 1, 
+  #            width = 0.2, 
+  #            alpha = 0.4) + 
+  stat_summary(fun = "mean", 
+               shape = 18) +
+  facet_wrap(~class) +
+  theme_bw() + 
+  theme(legend.position = "none") 
+```
+
+
+```{r}
+#| label: tbl-test_age_gender
+#| tbl-cap: "Average age for each class and by class with gender"
+#| tbl-cap-location: bottom
+#| message: false
+
+diabetes %>%
+  select(age, gender, class) %>%
+  tbl_summary(by = "class",
+             statistic = 
+               list(
+               all_continuous() ~ "{mean} ({sd})",
+               all_dichotomous() ~ "{p}%" 
+               )
+             ) %>% 
+  add_p()
+```
+
+\newpage
+
+\KOMAoptions{paper=portrait,pagesize}
+\recalctypearea
+
+```{r}
+#| label: tbl-eda_response
+#| tbl-cap: "Table of Responses"
+#| message: false
+#| error: false
+
+
+# table of responses 
+diabetes_long <- diabetes %>% 
+  pivot_longer(cols = c(3:17), names_to = "predictor", values_to = "response") 
+
+diabetes_response <- diabetes_long %>% 
+  group_by(predictor, response) %>% 
+  summarise(n = n())
+
+kableExtra::kbl(diabetes_response, booktabs = T) %>%
+  kableExtra::kable_styling(latex_options = c("hold_position"))
+
+```
+
+
+## Logistic Regression{#sec-ft_lr}
+
+```{r}
+#| label: tbl-logreg_8020f_summary
+#| tbl-cap: "Summary statistics of Full LR model using 80/20 data" 
+
+# tidysummary
+kableExtra::kbl(broom::tidy(train80.glm) %>%
+                  select(c(-3, -4)) %>%
+                  mutate(oddsratio = exp(estimate), .before = estimate) %>%
+                  mutate_if(is.numeric, round, digits = 3),
+                booktabs = T) %>%
+  kableExtra::kable_styling(latex_options = c("hold_position"))
+
+```
+
+
+```{r}
+#| label: tbl-logreg8020f_confuse
+#| tbl-cap: "Confusion matrix of the full model LR using 80/20 data"
+
+# confusion matrix strat 80/20 LR full model
+kableExtra::kbl(table(actual = test20.values, predicted = train80glm.predict), booktabs = T) %>% kableExtra::add_header_above(c(" ", "Predicted"=2)) %>% kableExtra::pack_rows("Actual", 1, 2) %>%
+  kableExtra::kable_styling(latex_options = c("hold_position"))
+```
+
+
+
+```{r}
+#| label: tbl-logregr_summary
+#| tbl-cap: "summary statistics of reduced LR model using 80/20 data"
+
+m8020r <- broom::tidy(train80.glm2) %>%
+  mutate(oddsratio = exp(estimate), .before=estimate) %>%
+  mutate_if(is.numeric, round, digits = 3)
+
+kableExtra::kbl(select(m8020r, c(-3, -4)), booktabs = T) %>%
+    kableExtra::kable_styling(latex_options = c("hold_position"))
+
+```
+
+```{r}
+#| label: tbl-logreg8020r_confuse
+#| tbl-cap: "Confusion matrix of the reduced LR model using 80/20 data"
+
+
+kableExtra::kbl(table(actual = test20.values, predict = train80glm2.predict2), booktabs = T) %>% 
+  kableExtra::add_header_above(c(" ", "Predicted"=2)) %>% kableExtra::pack_rows("Actual", 1, 2) %>%
+  kableExtra::kable_styling(latex_options = c("hold_position"))
+
+```
+
+## Random Forests{#sec-ft_rf}
+
+```{r}
+#| label: tbl-rf8020train_confuse
+#| tbl-cap: "Confusion Matrix of the full RF training model"
+
+kableExtra::kbl(bag.diabetes$confusion, booktabs = T) %>%
+  kableExtra::kable_styling(latex_options = c("hold_position"))
+
+```
+
+
+```{r}
+#| label: fig-rf8020train_error_rate
+#| fig-cap: "Plot of error rate of the full RF training model"
+#| fig-pos: 'H'
+
+plot(bag.diabetes, main="Full RF Training Model Error Rate")
+```
+
+
+```{r}
+#| label: tbl-rf8020f_confuse
+#| tbl-cap: "Confusion matrix of the full RF model using 80/20 data"
+
+kableExtra::kbl(table(actual = test20$class, predicted = yhat.bag), booktabs = T) %>%
+   kableExtra::add_header_above(c(" ", "Predicted"=2)) %>% kableExtra::pack_rows("Actual", 1, 2) %>%
+  kableExtra::kable_styling(latex_options = c("hold_position"))
+
+```
+
+
+```{r}
+#| label: fig-rf8020f_varimp
+#| fig-cap: "Variable Importance of the full RF model from 80/20 data"
+#| fig-pos: 'H'
+
+# ugly
+# varImpPlot(bag.diabetes, main = "Full RF Model from 80/20 data")
+rf8020f_imp <- data.frame(importance(bag.diabetes))
+rf8020f_imp <- rf8020f_imp %>% 
+  mutate(symptoms = rownames(rf8020f_imp), .before = Negative) %>% as_tibble()
+
+# re-order by MeanDecreaseAccuracy
+rf8020f_imp <- rf8020f_imp %>% 
+  mutate(symptoms = fct_reorder(symptoms, MeanDecreaseAccuracy))
+
+ggplot(rf8020f_imp, aes(y = MeanDecreaseAccuracy, x = symptoms)) + 
+  geom_bar(stat="identity", alpha = 0.6) + 
+  geom_hline(yintercept = 20, linetype = "dashed", color = "red") +
+  labs(y = "Mean Decrease Accuracy", x = "predictors") +
+  coord_flip() +
+  theme_bw()
+```
+
+
+```{r}
+#| label: tbl-rf8020r_confuse
+#| tbl-cap: "Confusion matrix of the reduced RF model using 80/20 data"
+
+kableExtra::kbl(table(actual = test20$class, predicted = yhat.bagred), booktabs = T) %>%
+  kableExtra::add_header_above(c(" ", "Predicted"=2)) %>% kableExtra::pack_rows("Actual", 1, 2) %>%
+  kableExtra::kable_styling(latex_options = c("hold_position"))
+
+
+```
+
+
+\newpage
+
+## Naive Bayes{#sec-ft_nb}
+
+```{r}
+#| label: tbl-nb8020f_confuse
+#| tbl-cap: "Confusion matrix of the full NB model using 80/20 data"
+
+kableExtra::kbl(table(actual = test20.values, predicted = diabetesnb.pred), booktabs = T) %>%
+  kableExtra::add_header_above(c(" ", "Predicted"=2)) %>% kableExtra::pack_rows("Actual", 1, 2) %>%
+  kableExtra::kable_styling(latex_options = c("hold_position"))
+```
+
+```{r}
+#| label: tbl-nb8020f_priors_symptoms
+#| tbl-cap: "Prior probability of class on symptoms"
+#| fig-pos: 'H'
+
+diabetesnb.priors <- data.frame(t(sapply(diabetes.nb$tables, c)))[ -c(1),]
+names(diabetesnb.priors) <- c("Negative.No", "Positive.No", "Negative.Yes", "Positve.Yes")
+
+diabetesnb.priors<- diabetesnb.priors %>% 
+  mutate(symptoms = rownames(diabetesnb.priors), .before = 1)
+diabetesnb.priors <- tibble(diabetesnb.priors)
+diabetesnb.priors <- diabetesnb.priors %>% 
+  mutate_if(is.numeric, round, digits = 3)
+
+gt(diabetesnb.priors) %>%
+  tab_header(title = "Prior Probabilities  of class on symptoms",
+             subtitle = "P(class | symptoms)")
+```
+
+
+\newpage
+
+
+```{r}
+#| label: tbl-nb8020f_priors_gender
+#| tbl-cap: "Prior probability of class on gender"
+#| fig-pos: 'H'
+
+diabetesnbgender.priors <- data.frame(t(sapply(diabetes.nb$tables, c)))[1,]
+colnames(diabetesnbgender.priors) <- c("Negative.No", "Positive.No", "Negative.Yes", "Positve.Yes")
+
+diabetesnbgender.priors<- diabetesnbgender.priors %>% 
+  mutate(symptoms = rownames(diabetesnbgender.priors), .before = 1)
+diabetesnbgender.priors <- tibble(diabetesnbgender.priors)
+diabetesnbgender.priors <- diabetesnbgender.priors %>% 
+  mutate_if(is.numeric, round, digits = 3)
+
+gt(diabetesnbgender.priors) %>%
+  tab_header(title = "Prior Probabilities",
+             subtitle = "P(class | gender)")
+```
+
+
+```{r}
+#| label: tbl-summary_scores
+#| tbl-cap: "Summary of the model performance"
+
+kableExtra::kbl(model_scores, booktabs = T) %>%
+  kableExtra::kable_styling(latex_options = c("hold_position"))
+```
+
+![diabetes rules](./fig_img/diabetes_rules2.png){#fig-diabetes_rules}
+
+![common predictors](./fig_img/diabetes_finalrules.png){#fig-diabetesfinalrules}
+
+\newpage
+
+
+# References

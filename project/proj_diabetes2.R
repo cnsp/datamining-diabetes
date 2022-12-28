@@ -1,0 +1,310 @@
+rm(list=ls())
+
+require(tidyverse)
+require(ISLR)
+require(randomForest)
+require(arules)
+require(arulesViz)
+require(tree)
+require(e1071)
+
+factor_levels <- c("No", "Yes")
+diabetes <- read_csv('./raw_data/diabetes.csv', 
+                     col_names = TRUE,
+                     col_types = list(
+                       `Age` = col_double(),
+                       `Gender` = col_factor(),
+                       `Polyuria` = col_factor(levels = factor_levels),
+                       `Polydipsia` = col_factor(levels = factor_levels),
+                       `sudden weight loss` = col_factor(levels = factor_levels),
+                       `weakness` = col_factor(levels = factor_levels),
+                       `Polyphagia` = col_factor(levels = factor_levels),
+                       `Genital thrush` = col_factor(levels = factor_levels),
+                       `visual blurring` = col_factor(levels = factor_levels),
+                       `Itching` = col_factor(levels = factor_levels),
+                       `Irritability` = col_factor(levels = factor_levels),
+                       `delayed healing` = col_factor(levels = factor_levels),
+                       `partial paresis` = col_factor(levels = factor_levels),
+                       `muscle stiffness` = col_factor(levels = factor_levels),
+                       `Alopecia` = col_factor(levels = factor_levels),
+                       `Obesity` = col_factor(levels = factor_levels),
+                       `class` = col_factor(levels = c('Negative', 'Positive'))
+                     ))
+
+names(diabetes) <- c('age', 'gender', 'polyuria', 'polydipsia', 'wtloss',
+                     'weakness', 'polyphagia', 'genitaltrush', 
+                     'visualblur', 'itching', 'irritable', 'delayheal',
+                     'partparesis', 'musclestiff', 'alopecia', 'obesity',
+                     'class')
+diabetes <- mutate(diabetes, id = c(1:520), .before = age)
+
+
+####### Exploratory Data Analysis #####
+summary(diabetes)
+
+
+diabetes %>% 
+  group_by(class) %>%
+  summarise(ave_age = mean(age),
+            med_age = median(age),
+            n = n())
+
+# age distribution of diabetes class by gender
+diabetes %>% 
+  group_by(class, gender) %>%
+  summarise(ave_age = mean(age),
+            med_age = median(age),
+            n = n())
+
+ggplot(diabetes, aes(x=age, y = , fill = gender)) +
+  geom_histogram(bins = 60, color = "black", fill = "white") +
+  facet_wrap(~class) +
+  theme_bw()
+
+
+## Males who are positive for diabetes 
+# 
+ggplot(diabetes, aes(x = class, y = age)) +
+  geom_boxplot() +
+  geom_jitter(shape =1, size = 1, width = 0.2) +
+  facet_wrap(~gender) +
+  theme_bw()
+
+# pees a lot
+diabetes %>% 
+  group_by(class, polyuria) %>%
+  summarise(n = n())
+
+# excess thirst
+diabetes %>% 
+  group_by(class, polydipsia) %>%
+  summarise(n = n())
+
+# weight loss
+diabetes %>% 
+  group_by(class, wtloss) %>%
+  summarise(n = n())
+
+# extreme hunger
+diabetes %>% 
+  group_by(class, polyphagia) %>%
+  summarise(n = n())
+
+# blurry vision
+diabetes %>% 
+  group_by(class, visualblur) %>%
+  summarise(n = n())
+
+# fatigue
+diabetes %>% 
+  group_by(class, weakness) %>%
+  summarise(n = n())
+
+# delay heal 
+diabetes %>% 
+  group_by(class, delayheal) %>%
+  summarise(n = n())
+
+# delay heal 
+diabetes %>% 
+  group_by(class, obesity) %>%
+  summarise(n = n())
+
+diabetesdf <- diabetesdf %>% 
+  mutate(id = 1:nrow(diabetesdf), .before = age)
+
+diabetestall <- diabetesdf %>%
+  pivot_longer(cols = c(4:17), names_to = 'symptoms', values_to = 'val')
+
+diabetestall
+
+filter(diabetestall, class == "Positive" & symptoms == "polyuria") %>% 
+  summarise(pct = n()/520)
+
+symptoms <- unique(diabetestall$symptoms)
+
+
+################ END OF EDA ##############
+
+
+
+################ START OF LOGISTIC REGRESSION ############
+
+# stratified hold-out following 80/20. This means 80% of the positive case and 80% of the negative case will comprise the total 80% of the train data
+set.seed(100)
+train80 <- sample(1:nrow(diabetes), 
+                  replace = F, 
+                  prob = diabetes$class, 
+                  size = nrow(diabetes)*0.8)
+test20 <- diabetes[-train80,]
+test20.values <- diabetes$class[-train80]
+
+# logistic regression procedure 
+
+# FULL MODEL
+train80.glm <- glm(class ~ . -id ,
+                   data=diabetes,
+                   subset=train80,
+                   family=binomial)
+summary(train80.glm)
+# there are 8 significant variables below test significance alpha=0.05
+# age, genderFemale, polyuriaYes, polydispsiaNom genitaltrushYes, itchingNo, irritableYes, partparesis
+
+# coefficients of full model logistic regression
+coef(train80.glm)
+# odd-ratio of full model logistic regression
+exp(coef(train80.glm))
+
+# performance logistic regression full model 
+train80glm.probs <- predict(train80.glm, test20, type="response")
+glm.predict <- ifelse(train80glm.probs > 0.5, "Positive", "Negative")
+table(actual = test20.values, pred = glm.predict)
+
+# prediction accuracy of 80/20 hold-out
+mean(test20.values == glm.predict)
+
+
+# k=10 cross-validation logistic regression
+set.seed(100)
+
+k = 10
+
+# randomly assign indices to folds
+folds <- sample(1:k, nrow(diabetes), replace = TRUE)
+
+# evaluating the 10-fold cross-validation prediction of the model.
+
+# zero vectors to hold accuracy values of cv method
+accuracy = rep(0,k)
+
+for(i in 1:k)
+{
+  # cv logistic regression model of train data
+  train.glm2 <- glm(class ~ . -id,
+                      family = "binomial",
+                      data = diabetes[folds!=i, ])
+  
+  # assign the current ith iteration as the test data
+  test.cv <- diabetes[folds==i, ]
+  
+  # obtain the probabilities using the test data
+  trainglm.probs2 <- predict(train.glm2, test.cv, type="response")
+  
+  glm.predict2 <- ifelse(trainglm.probs2 > 0.5, "Positive", "Negative")
+  
+  # y-value (class variable) of the test data in the ith iteration
+  testcv.values <- diabetes$class[folds==i]
+  
+  # calculate the accuracy 
+  accuracy[i] <- mean(glm.predict2==testcv.values)
+}
+
+# Prediction Accuracy of CV Logistic Regression
+mean(accuracy)
+
+################ END OF LOGISTIC REGRESSION ############
+
+# RANDOM FORESTS
+set.seed(100)
+
+# random forest model using train80 train dataset (stratified 80/20)
+# mtry will be default sqrt(p) where p is the number of parameters
+
+bag.diabetes <- randomForest(class ~ . -id, 
+                             data = diabetes,
+                             subset = train80,
+                             importance = TRUE)
+
+# rf 80/20 model prediction
+yhat.bag <- predict(bag.diabetes, 
+                    newdata=diabetes[-train80,]) # or test20
+
+# rf 80/20 model performance
+table(test20$class, yhat.bag)
+mean(test20$class == yhat.bag)
+
+importance(bag.diabetes)
+varImpPlot(bag.diabetes)
+
+# visualize a particular decision tree in random forest
+plot(tree(bag.diabetes))
+text(tree(bag.diabetes), cex = 0.8, pretty = TRUE)
+
+####### END OF RANDOM FORESTS ######
+
+
+#### NAIVE BAYES ####
+
+## stratified 80/20 NB model
+diabetes.nb <- naiveBayes(class ~ . -id, 
+                          data = diabetes,
+                          subset = train80)
+
+## stratified 80/20 NB prediction
+diabetesnb.pred <- predict(diabetes.nb, 
+                           test20, 
+                           type = "class")
+diabetesnb.pred
+## stratified 80/20 NB performance
+table(test20.values, diabetesnb.pred)
+mean(test20.values == diabetesnb.pred)
+
+## NB CROSS VALIDATION
+# will use the same fold parameters and random assignment in logistic regression
+
+# zero vectors to hold accuracy values of cv method
+accuracy.nb = rep(0,k)
+
+for(i in 1:k)
+{
+  # cv logistic regression model of train data
+  train.nb <- naiveBayes(class ~ . -id,
+                           data = diabetes[folds!=i, ],
+                           type = "class")
+  
+  # assign the current ith iteration as the test data
+  test.nb <- diabetes[folds == i,]
+  
+  # obtain prediction using test data
+  trainnb.pred <- predict(train.nb, 
+                          test.nb, 
+                          type= "class")
+  
+  # obtain response values of test data
+  testnb.values <- diabetes$class[folds == i]
+  
+  # calculate the accuracy 
+  accuracy.nb[i] <- mean(testnb.values == trainnb.pred)
+  print(table(testnb.values, trainnb.pred))
+  
+}
+
+# Prediction Accuracy of CV Naive Bayes
+mean(accuracy.nb)
+
+## Association Rules
+
+# prepare data. make id and age into category
+diabetes2 <- diabetes
+
+diabetes2 <- diabetes2 %>% 
+  mutate(agegrp = ifelse(age <= 24, "early", ifelse(age >= 25 & age == 54, "prime", "mature")), .before = age) %>%
+  select(c(-age, -id, -agegrp))
+
+diabetes2$agegrp <- as.factor(diabetes2$agegrp)
+# diabetes2$id <- as.factor(diabetes2$agegrp)
+
+transac <- as(diabetes2, "transactions")
+dim(transac)
+itemLabels(transac)
+summary(transac)
+itemFrequencyPlot(transac, topN=10, cex.names = 1)
+
+
+
+diabetes.rules <- apriori(data = transac,
+                          parameter = list(minlen=4, supp=0.3,conf=0.5, target = "rules"),
+                          appearance = list(default="lhs", rhs = "class=Positive"))
+summary(diabetes.rules)
+inspect(diabetes.rules)
+
